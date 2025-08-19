@@ -26,42 +26,84 @@ export async function GET(request: NextRequest) {
   return NextResponse.json(attendance)
 }
 
+/**
+ * POST body:
+ * {
+ *   user_id: string,
+ *   confidence_score?: number,
+ *   action: "enter" | "exit"
+ * }
+ */
 export async function POST(request: NextRequest) {
   const supabase = createServerClient()
 
   try {
-    const { user_id, confidence_score } = await request.json()
+    const { user_id, confidence_score, action } = await request.json()
+    if (!user_id || !action) {
+      return NextResponse.json({ error: "user_id and action are required" }, { status: 400 })
+    }
 
-    // Check if user already marked present today
     const today = new Date().toISOString().split("T")[0]
-    const { data: existingAttendance } = await supabase
-      .from("attendance")
-      .select("id")
-      .eq("user_id", user_id)
-      .eq("date", today)
-      .single()
 
-    if (existingAttendance) {
-      return NextResponse.json({ message: "Already marked present today" }, { status: 200 })
-    }
+    if (action === "enter") {
+      // Prevent duplicate entry for the same day
+      const { data: existing } = await supabase
+        .from("attendance")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("date", today)
+        .single()
 
-    const { data, error } = await supabase
-      .from("attendance")
-      .insert([
-        {
+      if (existing) {
+        return NextResponse.json({ message: "Already marked entered today" }, { status: 200 })
+      }
+
+      const { data, error } = await supabase
+        .from("attendance")
+        .insert([{
           user_id,
-          confidence_score,
-          status: "present",
-        },
-      ])
-      .select()
+          confidence_score: confidence_score ?? null,
+          status: "entered",
+          time_in: new Date().toISOString(),
+          date: today
+        }])
+        .select()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json(data?.[0] ?? null)
     }
 
-    return NextResponse.json(data[0])
-  } catch (error) {
+    if (action === "exit") {
+      // Find today's entry record
+      const { data: existing, error: findErr } = await supabase
+        .from("attendance")
+        .select("id, time_out")
+        .eq("user_id", user_id)
+        .eq("date", today)
+        .single()
+
+      if (findErr || !existing) {
+        return NextResponse.json({ error: "No entry record found to mark exit" }, { status: 400 })
+      }
+      if (existing.time_out) {
+        return NextResponse.json({ message: "Already marked exited today" }, { status: 200 })
+      }
+
+      const { data, error } = await supabase
+        .from("attendance")
+        .update({
+          status: "exited",
+          time_out: new Date().toISOString(),
+        })
+        .eq("id", existing.id)
+        .select()
+
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json(data?.[0] ?? null)
+    }
+
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 })
+  } catch {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
   }
 }

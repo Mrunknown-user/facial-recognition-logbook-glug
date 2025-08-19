@@ -77,7 +77,6 @@ export default function CameraScanner() {
       }
 
       try {
-        // If no selected camera yet, just request default
         const constraints = selectedCamera
           ? { video: { deviceId: { exact: selectedCamera } } }
           : { video: true }
@@ -87,7 +86,6 @@ export default function CameraScanner() {
         streamRef.current = stream
         setMessage(null)
 
-        // After permission granted, fetch cameras with labels
         const devices = await navigator.mediaDevices.enumerateDevices()
         const videoDevices = devices.filter(d => d.kind === "videoinput")
         setCameras(videoDevices)
@@ -110,7 +108,6 @@ export default function CameraScanner() {
       streamRef.current = null
     }
   }, [isCameraActive, selectedCamera])
-
 
   const captureAndRecognize = async () => {
     if (!videoRef.current || !canvasRef.current || users.length === 0) {
@@ -178,7 +175,7 @@ export default function CameraScanner() {
     setLoading(false)
   }
 
-  const markAttendance = async () => {
+  const markAttendance = async (action: "enter" | "exit") => {
     if (!recognizedFaces.length) {
       setMessage({ type: "error", text: "No recognized face." })
       return
@@ -194,14 +191,15 @@ export default function CameraScanner() {
             body: JSON.stringify({
               user_id: face.user.user_id,
               confidence_score: face.confidence / 100,
+              action
             }),
           })
         )
       )
-      setMessage({ type: "success", text: "Attendance marked." })
+      setMessage({ type: "success", text: `Marked ${action}.` })
       setRecognizedFaces([])
     } catch {
-      setMessage({ type: "error", text: "Failed to mark attendance." })
+      setMessage({ type: "error", text: `Failed to mark ${action}.` })
     } finally {
       setLoading(false)
     }
@@ -261,10 +259,16 @@ export default function CameraScanner() {
               </Button>
 
               {recognizedFaces.length > 0 && (
-                <Button onClick={markAttendance} disabled={loading} className="bg-green-600 hover:bg-green-700">
-                  <CheckCircle className="mr-2 h-5 w-5" />
-                  Mark Present
-                </Button>
+                <>
+                  <Button onClick={() => markAttendance("enter")} disabled={loading} className="bg-green-600 hover:bg-green-700">
+                    <CheckCircle className="mr-2 h-5 w-5" />
+                    Mark Entered
+                  </Button>
+                  <Button onClick={() => markAttendance("exit")} disabled={loading} className="bg-red-600 hover:bg-red-700">
+                    <CheckCircle className="mr-2 h-5 w-5" />
+                    Mark Exited
+                  </Button>
+                </>
               )}
             </div>
           </>

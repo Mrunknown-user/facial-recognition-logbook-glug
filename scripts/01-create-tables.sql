@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS attendance (
   user_id VARCHAR(255) REFERENCES users(user_id),
   date DATE DEFAULT CURRENT_DATE,
   time_in TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  status VARCHAR(50) DEFAULT 'present',
+  time_out TIMESTAMP WITH TIME ZONE,              -- NEW
+  status VARCHAR(50) DEFAULT 'entered',           -- default now reflects entry
   confidence_score DECIMAL(5,4),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

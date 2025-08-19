@@ -23,6 +23,7 @@ interface AttendanceRecord {
   user_id: string
   date: string
   time_in: string
+  time_out: string | null
   status: string
   confidence_score: number
   users: {
@@ -38,7 +39,8 @@ export default function AdminAttendanceManagement() {
   const [loading, setLoading] = useState(false)
   const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null)
   const [editStatus, setEditStatus] = useState("")
-  const [editTime, setEditTime] = useState("")
+  const [editTimeIn, setEditTimeIn] = useState("")
+  const [editTimeOut, setEditTimeOut] = useState("")
 
   const loadAttendance = async (date: string) => {
     setLoading(true)
@@ -59,7 +61,8 @@ export default function AdminAttendanceManagement() {
     loadAttendance(selectedDate)
   }, [selectedDate])
 
-  const formatTime = (timeString: string) => {
+  const formatTime = (timeString?: string | null) => {
+    if (!timeString) return "—"
     return new Date(timeString).toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
@@ -76,14 +79,16 @@ export default function AdminAttendanceManagement() {
   const handleEdit = (record: AttendanceRecord) => {
     setEditingRecord(record)
     setEditStatus(record.status)
-    setEditTime(new Date(record.time_in).toTimeString().slice(0, 5))
+    setEditTimeIn(new Date(record.time_in).toTimeString().slice(0, 5))
+    setEditTimeOut(record.time_out ? new Date(record.time_out).toTimeString().slice(0, 5) : "")
   }
 
   const saveEdit = async () => {
     if (!editingRecord) return
 
     try {
-      const timeIn = new Date(`${editingRecord.date}T${editTime}:00`)
+      const timeInIso = new Date(`${editingRecord.date}T${editTimeIn || "00:00"}:00`).toISOString()
+      const timeOutIso = editTimeOut ? new Date(`${editingRecord.date}T${editTimeOut}:00`).toISOString() : null
 
       const response = await fetch(`/api/attendance/${editingRecord.id}`, {
         method: "PUT",
@@ -92,7 +97,8 @@ export default function AdminAttendanceManagement() {
         },
         body: JSON.stringify({
           status: editStatus,
-          time_in: timeIn.toISOString(),
+          time_in: timeInIso,
+          time_out: timeOutIso,
         }),
       })
 
@@ -146,7 +152,7 @@ export default function AdminAttendanceManagement() {
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
               <div className="flex items-center gap-1">
                 <Users className="h-4 w-4" />
-                <span>{attendance.length} Present</span>
+                <span>{attendance.length} Records</span>
               </div>
             </div>
           </div>
@@ -180,18 +186,23 @@ export default function AdminAttendanceManagement() {
                       <div className="text-right">
                         <div className="flex items-center gap-1 text-sm">
                           <Clock className="h-3 w-3" />
-                          {formatTime(record.time_in)}
+                          Entered: {formatTime(record.time_in)}
+                        </div>
+                        <div className="flex items-center gap-1 text-sm">
+                          <Clock className="h-3 w-3" />
+                          Exited: {formatTime(record.time_out)}
                         </div>
                         <Badge variant="secondary" className={getConfidenceColor(record.confidence_score)}>
                           {(record.confidence_score * 100).toFixed(1)}% confidence
                         </Badge>
                       </div>
-                      <Badge variant="default" className="bg-green-100 text-green-800">
+
+                      <Badge variant="default" className={record.status === "exited" ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"}>
                         {record.status}
                       </Badge>
 
                       <div className="flex gap-1">
-                        <Dialog>
+                        <Dialog open={editingRecord?.id === record.id} onOpenChange={(open) => !open && setEditingRecord(null)}>
                           <DialogTrigger asChild>
                             <Button onClick={() => handleEdit(record)} variant="outline" size="sm">
                               <Edit className="h-4 w-4" />
@@ -210,19 +221,34 @@ export default function AdminAttendanceManagement() {
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
+                                    <SelectItem value="entered">Entered</SelectItem>
+                                    <SelectItem value="exited">Exited</SelectItem>
                                     <SelectItem value="present">Present</SelectItem>
                                     <SelectItem value="late">Late</SelectItem>
                                     <SelectItem value="absent">Absent</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
-                              <div className="space-y-2">
-                                <Label>Time</Label>
-                                <Input type="time" value={editTime} onChange={(e) => setEditTime(e.target.value)} />
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                  <Label>Entered Time</Label>
+                                  <Input type="time" value={editTimeIn} onChange={(e) => setEditTimeIn(e.target.value)} />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Exited Time (optional)</Label>
+                                  <Input type="time" value={editTimeOut} onChange={(e) => setEditTimeOut(e.target.value)} />
+                                </div>
                               </div>
-                              <Button onClick={saveEdit} className="w-full">
-                                Save Changes
-                              </Button>
+
+                              <div className="flex gap-2">
+                                <Button onClick={saveEdit} className="w-full">
+                                  Save Changes
+                                </Button>
+                                <Button variant="outline" className="w-full" onClick={() => setEditingRecord(null)}>
+                                  Cancel
+                                </Button>
+                              </div>
                             </div>
                           </DialogContent>
                         </Dialog>

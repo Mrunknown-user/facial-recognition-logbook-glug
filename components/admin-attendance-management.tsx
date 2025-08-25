@@ -7,24 +7,13 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { CalendarDays, Clock, Edit, Trash2, Users } from "lucide-react"
+import { CalendarDays, Clock, Trash2, Users, Timer } from "lucide-react"
 
-interface AttendanceRecord {
+interface AttendanceLog {
   id: string
   user_id: string
-  date: string
-  time_in: string
-  time_out: string | null
-  status: string
+  action: "enter" | "exit"
+  timestamp: string
   confidence_score: number
   users: {
     user_id: string
@@ -33,14 +22,16 @@ interface AttendanceRecord {
   }
 }
 
+interface Session {
+  entered: string
+  exited?: string
+  confidence_score: number
+}
+
 export default function AdminAttendanceManagement() {
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>([])
+  const [attendance, setAttendance] = useState<AttendanceLog[]>([])
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0])
   const [loading, setLoading] = useState(false)
-  const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null)
-  const [editStatus, setEditStatus] = useState("")
-  const [editTimeIn, setEditTimeIn] = useState("")
-  const [editTimeOut, setEditTimeOut] = useState("")
 
   const loadAttendance = async (date: string) => {
     setLoading(true)
@@ -61,7 +52,7 @@ export default function AdminAttendanceManagement() {
     loadAttendance(selectedDate)
   }, [selectedDate])
 
-  const formatTime = (timeString?: string | null) => {
+  const formatTime = (timeString?: string) => {
     if (!timeString) return "—"
     return new Date(timeString).toLocaleTimeString("en-US", {
       hour: "2-digit",
@@ -70,58 +61,47 @@ export default function AdminAttendanceManagement() {
     })
   }
 
+  const formatDuration = (start?: string, end?: string) => {
+    if (!start || !end) return "—"
+    const diffMs = new Date(end).getTime() - new Date(start).getTime()
+    if (diffMs <= 0) return "—"
+    const mins = Math.floor(diffMs / 60000)
+    const hrs = Math.floor(mins / 60)
+    const remMins = mins % 60
+    return hrs > 0 ? `${hrs}h ${remMins}m` : `${remMins}m`
+  }
+
   const getConfidenceColor = (confidence: number) => {
     if (confidence >= 0.8) return "bg-green-100 text-green-800"
     if (confidence >= 0.6) return "bg-yellow-100 text-yellow-800"
     return "bg-red-100 text-red-800"
   }
 
-  const handleEdit = (record: AttendanceRecord) => {
-    setEditingRecord(record)
-    setEditStatus(record.status)
-    setEditTimeIn(new Date(record.time_in).toTimeString().slice(0, 5))
-    setEditTimeOut(record.time_out ? new Date(record.time_out).toTimeString().slice(0, 5) : "")
-  }
+  // Group raw logs into enter/exit sessions
+  const groupSessions = (logs: AttendanceLog[]): Session[] => {
+    const sessions: Session[] = []
+    let current: Session | null = null
 
-  const saveEdit = async () => {
-    if (!editingRecord) return
-
-    try {
-      const timeInIso = new Date(`${editingRecord.date}T${editTimeIn || "00:00"}:00`).toISOString()
-      const timeOutIso = editTimeOut ? new Date(`${editingRecord.date}T${editTimeOut}:00`).toISOString() : null
-
-      const response = await fetch(`/api/attendance/${editingRecord.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          status: editStatus,
-          time_in: timeInIso,
-          time_out: timeOutIso,
-        }),
-      })
-
-      if (response.ok) {
-        loadAttendance(selectedDate)
-        setEditingRecord(null)
+    for (const log of logs) {
+      if (log.action === "enter") {
+        if (current) sessions.push(current)
+        current = { entered: log.timestamp, confidence_score: log.confidence_score }
       }
-    } catch (error) {
-      console.error("Failed to update attendance:", error)
+      if (log.action === "exit" && current) {
+        current.exited = log.timestamp
+        sessions.push(current)
+        current = null
+      }
     }
+    if (current) sessions.push(current)
+    return sessions
   }
 
   const deleteRecord = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this attendance record?")) return
-
+    if (!confirm("Are you sure you want to delete this attendance log?")) return
     try {
-      const response = await fetch(`/api/attendance/${id}`, {
-        method: "DELETE",
-      })
-
-      if (response.ok) {
-        loadAttendance(selectedDate)
-      }
+      const response = await fetch(`/api/attendance/${id}`, { method: "DELETE" })
+      if (response.ok) loadAttendance(selectedDate)
     } catch (error) {
       console.error("Failed to delete attendance:", error)
     }
@@ -152,7 +132,7 @@ export default function AdminAttendanceManagement() {
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
               <div className="flex items-center gap-1">
                 <Users className="h-4 w-4" />
-                <span>{attendance.length} Records</span>
+                <span>{attendance.length} Logs</span>
               </div>
             </div>
           </div>
@@ -160,112 +140,79 @@ export default function AdminAttendanceManagement() {
           {loading ? (
             <div className="text-center py-8">Loading attendance records...</div>
           ) : attendance.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">No attendance records found for {selectedDate}</div>
+            <div className="text-center py-8 text-muted-foreground">
+              No attendance logs found for {selectedDate}
+            </div>
           ) : (
             <div className="space-y-3">
-              {attendance.map((record) => (
-                <Card key={record.id} className="p-4">
-                  <div className="flex items-center justify-between">
+              {Object.values(
+                attendance.reduce((acc: Record<string, AttendanceLog[]>, log) => {
+                  const key = log.user_id
+                  if (!acc[key]) acc[key] = []
+                  acc[key].push(log)
+                  return acc
+                }, {})
+              ).map((logs) => {
+                const user = logs[0].users
+                const sessions = groupSessions(
+                  logs.sort((a, b) => +new Date(a.timestamp) - +new Date(b.timestamp))
+                )
+
+                return (
+                  <Card key={user.user_id} className="p-4">
                     <div className="flex items-center gap-3">
                       <Avatar>
-                        <AvatarImage src={record.users.image_url || "/placeholder.svg"} alt={record.users.name} />
+                        <AvatarImage src={user.image_url || "/placeholder.svg"} alt={user.name} />
                         <AvatarFallback>
-                          {record.users.name
-                            .split(" ")
-                            .map((n) => n[0])
-                            .join("")}
+                          {user.name.split(" ").map((n) => n[0]).join("")}
                         </AvatarFallback>
                       </Avatar>
                       <div>
-                        <div className="font-semibold">{record.users.name}</div>
-                        <div className="text-sm text-muted-foreground">ID: {record.users.user_id}</div>
+                        <div className="font-semibold">{user.name}</div>
+                        <div className="text-sm text-muted-foreground">ID: {user.user_id}</div>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                      <div className="text-right">
-                        <div className="flex items-center gap-1 text-sm">
-                          <Clock className="h-3 w-3" />
-                          Entered: {formatTime(record.time_in)}
+                    <div className="mt-3 space-y-2">
+                      {sessions.map((s, idx) => (
+                        <div key={idx} className="flex items-center justify-between border-b pb-1">
+                          <div className="flex flex-col text-sm">
+                            <span>
+                              <Clock className="inline h-3 w-3 mr-1" />
+                              Entered: {formatTime(s.entered)}
+                            </span>
+                            <span>
+                              <Clock className="inline h-3 w-3 mr-1" />
+                              Exited: {formatTime(s.exited)}
+                            </span>
+                            <span>
+                              <Timer className="inline h-3 w-3 mr-1" />
+                              Stayed: {formatDuration(s.entered, s.exited)}
+                            </span>
+                          </div>
+                          <Badge variant="secondary" className={getConfidenceColor(s.confidence_score)}>
+                            {(s.confidence_score * 100).toFixed(1)}% confidence
+                          </Badge>
                         </div>
-                        <div className="flex items-center gap-1 text-sm">
-                          <Clock className="h-3 w-3" />
-                          Exited: {formatTime(record.time_out)}
-                        </div>
-                        <Badge variant="secondary" className={getConfidenceColor(record.confidence_score)}>
-                          {(record.confidence_score * 100).toFixed(1)}% confidence
-                        </Badge>
-                      </div>
+                      ))}
+                    </div>
 
-                      <Badge variant="default" className={record.status === "exited" ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"}>
-                        {record.status}
-                      </Badge>
-
-                      <div className="flex gap-1">
-                        <Dialog open={editingRecord?.id === record.id} onOpenChange={(open) => !open && setEditingRecord(null)}>
-                          <DialogTrigger asChild>
-                            <Button onClick={() => handleEdit(record)} variant="outline" size="sm">
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent>
-                            <DialogHeader>
-                              <DialogTitle>Edit Attendance</DialogTitle>
-                              <DialogDescription>Modify attendance record for {record.users.name}</DialogDescription>
-                            </DialogHeader>
-                            <div className="space-y-4">
-                              <div className="space-y-2">
-                                <Label>Status</Label>
-                                <Select value={editStatus} onValueChange={setEditStatus}>
-                                  <SelectTrigger>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="entered">Entered</SelectItem>
-                                    <SelectItem value="exited">Exited</SelectItem>
-                                    <SelectItem value="present">Present</SelectItem>
-                                    <SelectItem value="late">Late</SelectItem>
-                                    <SelectItem value="absent">Absent</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                  <Label>Entered Time</Label>
-                                  <Input type="time" value={editTimeIn} onChange={(e) => setEditTimeIn(e.target.value)} />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label>Exited Time (optional)</Label>
-                                  <Input type="time" value={editTimeOut} onChange={(e) => setEditTimeOut(e.target.value)} />
-                                </div>
-                              </div>
-
-                              <div className="flex gap-2">
-                                <Button onClick={saveEdit} className="w-full">
-                                  Save Changes
-                                </Button>
-                                <Button variant="outline" className="w-full" onClick={() => setEditingRecord(null)}>
-                                  Cancel
-                                </Button>
-                              </div>
-                            </div>
-                          </DialogContent>
-                        </Dialog>
-
+                    <div className="mt-2 flex gap-2">
+                      {logs.map((log) => (
                         <Button
-                          onClick={() => deleteRecord(record.id)}
+                          key={log.id}
+                          onClick={() => deleteRecord(log.id)}
                           variant="outline"
                           size="sm"
                           className="text-red-600 hover:text-red-700"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
-                      </div>
+                      ))}
                     </div>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                )
+              })}
             </div>
           )}
         </CardContent>

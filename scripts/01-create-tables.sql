@@ -9,22 +9,37 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Create attendance table to track attendance records
+-- -- Create attendance table to track attendance records
+-- CREATE TABLE IF NOT EXISTS attendance (
+--   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+--   user_id VARCHAR(255) REFERENCES users(user_id),
+--   date DATE DEFAULT CURRENT_DATE,
+--   time_in TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+--   time_out TIMESTAMP WITH TIME ZONE,              -- NEW
+--   status VARCHAR(50) DEFAULT 'entered',           -- default now reflects entry
+--   confidence_score DECIMAL(5,4),
+--   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- );
+
+DROP TABLE IF EXISTS attendance;
+
 CREATE TABLE IF NOT EXISTS attendance (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id VARCHAR(255) REFERENCES users(user_id),
-  date DATE DEFAULT CURRENT_DATE,
-  time_in TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  time_out TIMESTAMP WITH TIME ZONE,              -- NEW
-  status VARCHAR(50) DEFAULT 'entered',           -- default now reflects entry
+  action VARCHAR(10) CHECK (action IN ('enter','exit')) NOT NULL,
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   confidence_score DECIMAL(5,4),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Index for fast lookups
+CREATE INDEX IF NOT EXISTS idx_attendance_user_id ON attendance(user_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_timestamp ON attendance(timestamp);
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id);
-CREATE INDEX IF NOT EXISTS idx_attendance_user_id ON attendance(user_id);
-CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date);
+-- CREATE INDEX IF NOT EXISTS idx_attendance_user_id ON attendance(user_id);
+-- CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()

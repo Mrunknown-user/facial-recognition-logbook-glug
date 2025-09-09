@@ -17,6 +17,8 @@ const nextConfig = {
     }
     return config
   },
+  // Custom property for allowed development origins
+  allowedDevOrigins: ['local-origin.dev', '*.local-origin.dev'],
 }
 
 export default nextConfig

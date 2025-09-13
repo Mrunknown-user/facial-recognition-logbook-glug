@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,12 +19,10 @@ import {
 } from "@/components/ui/dialog"
 import { getFaceDescriptor } from "@/lib/face-recognition"
 import { supabase } from "@/lib/supabase"
-import { UserPlus, Upload, Trash2, Users } from "lucide-react"
-import { createPagesBrowserClient } from '@supabase/auth-helpers-nextjs'
+import { UserPlus, Upload, Trash2, Users, Camera } from "lucide-react"
+import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs"
 
-const supabaseClient  = createPagesBrowserClient()
-
-
+const supabaseClient = createPagesBrowserClient()
 
 interface User {
   id: string
@@ -45,9 +42,15 @@ export default function AdminUserManagement() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isCameraOpen, setIsCameraOpen] = useState(false)
+  const [isReady, setIsReady] = useState(false)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
+  // Load users from API
   const loadUsers = async () => {
     try {
       const response = await fetch("/api/users")
@@ -64,6 +67,7 @@ export default function AdminUserManagement() {
     loadUsers()
   }, [])
 
+  // Image upload
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
@@ -76,10 +80,112 @@ export default function AdminUserManagement() {
     }
   }
 
+  // ---------------- Camera Lifecycle ----------------
+  useEffect(() => {
+    if (!isCameraOpen) return
+
+    console.log("🎥 Starting camera...")
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+      .then((stream) => {
+        streamRef.current = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          videoRef.current.onloadeddata = () => {
+            console.log("✅ Video ready:", videoRef.current?.videoWidth, "x", videoRef.current?.videoHeight)
+            setIsReady(true)
+          }
+          videoRef.current.play().catch((err) => {
+            console.warn("⚠️ Autoplay prevented:", err)
+          })
+          console.log("✅ Camera stream set")
+        }
+      })
+      .catch((err) => {
+        console.error("❌ Camera error:", err)
+        setMessage({ type: "error", text: "Unable to access camera" })
+      })
+
+    return () => {
+      console.log("🛑 Stopping camera...")
+      streamRef.current?.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+      setIsReady(false)
+    }
+  }, [isCameraOpen])
+
+  const startCamera = () => setIsCameraOpen(true)
+  const stopCamera = () => setIsCameraOpen(false)
+
+  // ---------------- Capture Passport Image ----------------
+  const captureImage = () => {
+    if (!videoRef.current) {
+      console.error("❌ No video element found")
+      return
+    }
+    const video = videoRef.current
+
+    console.log("📸 Attempting capture...")
+    console.log("Video ready state:", video.readyState)
+    console.log("Video dimensions:", video.videoWidth, "x", video.videoHeight)
+
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.warn("⚠️ Camera not ready yet, please try again")
+      setMessage({ type: "error", text: "Camera not ready yet, please try again" })
+      return
+    }
+
+    const targetWidth = 700
+    const targetHeight = 900
+    const canvas = document.createElement("canvas")
+    canvas.width = targetWidth
+    canvas.height = targetHeight
+    const ctx = canvas.getContext("2d")
+
+    if (ctx) {
+      console.log("🖼 Cropping with aspect ratio 7:9")
+      const videoAspect = video.videoWidth / video.videoHeight
+      const targetAspect = targetWidth / targetHeight
+
+      let sx = 0,
+        sy = 0,
+        sWidth = video.videoWidth,
+        sHeight = video.videoHeight
+
+      if (videoAspect > targetAspect) {
+        sWidth = video.videoHeight * targetAspect
+        sx = (video.videoWidth - sWidth) / 2
+        console.log("➡️ Cropping sides:", { sx, sWidth })
+      } else {
+        sHeight = video.videoWidth / targetAspect
+        sy = (video.videoHeight - sHeight) / 2
+        console.log("⬆️ Cropping top/bottom:", { sy, sHeight })
+      }
+
+      ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight)
+    }
+
+    canvas.toBlob((blob) => {
+      if (blob) {
+        console.log("✅ Blob created:", blob.size, "bytes")
+        const file = new File([blob], "passport-photo.jpg", { type: "image/jpeg" })
+        setImage(file)
+        const previewUrl = URL.createObjectURL(file)
+        console.log("🖼 Preview URL:", previewUrl)
+        setImagePreview(previewUrl)
+      } else {
+        console.error("❌ Failed to create blob")
+      }
+    }, "image/jpeg")
+
+    stopCamera()
+  }
+
+  // ---------------- Register User ----------------
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!userId || !name || !image) {
-      setMessage({ type: "error", text: "Please fill all fields and upload an image" })
+      setMessage({ type: "error", text: "Please fill all fields and upload/capture an image" })
       return
     }
 
@@ -87,7 +193,6 @@ export default function AdminUserManagement() {
     setMessage(null)
 
     try {
-      // Check if user already exists
       const checkResponse = await fetch(`/api/users/check/${userId}`)
       if (checkResponse.ok) {
         const { exists } = await checkResponse.json()
@@ -98,14 +203,10 @@ export default function AdminUserManagement() {
         }
       }
 
-      // Upload image to Supabase Storage
       const fileExt = image.name.split(".").pop()
       const fileName = `${userId}.${fileExt}`
 
-      const { error: uploadError } = await supabase.storage
-        .from("user-images")
-        .upload(fileName, image, { upsert: true })
-
+      const { error: uploadError } = await supabase.storage.from("user-images").upload(fileName, image, { upsert: true })
       if (uploadError) {
         console.error("Upload error:", uploadError)
         setMessage({ type: "error", text: `Image upload failed: ${uploadError.message}` })
@@ -113,29 +214,22 @@ export default function AdminUserManagement() {
         return
       }
 
-
-      // Get public URL
       const {
         data: { publicUrl },
       } = supabase.storage.from("user-images").getPublicUrl(fileName)
 
-      // Extract face descriptor
       if (imageRef.current) {
         try {
           const descriptor = await getFaceDescriptor(imageRef.current)
-
           if (!descriptor) {
-            setMessage({ type: "error", text: "No face detected in the image. Please upload a clear face photo." })
+            setMessage({ type: "error", text: "No face detected. Please upload a clear face photo." })
             setLoading(false)
             return
           }
 
-          // Save user to database
           const response = await fetch("/api/users", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               user_id: userId,
               name,
@@ -172,14 +266,11 @@ export default function AdminUserManagement() {
     }
   }
 
+  // ---------------- Delete User ----------------
   const deleteUser = async (userId: string) => {
     if (!confirm("Are you sure you want to delete this user?")) return
-
     try {
-      const response = await fetch(`/api/users/${userId}`, {
-        method: "DELETE",
-      })
-
+      const response = await fetch(`/api/users/${userId}`, { method: "DELETE" })
       if (response.ok) {
         setMessage({ type: "success", text: "User deleted successfully" })
         loadUsers()
@@ -191,6 +282,7 @@ export default function AdminUserManagement() {
     }
   }
 
+  // ---------------- UI ----------------
   return (
     <div className="space-y-6">
       <Card>
@@ -218,28 +310,16 @@ export default function AdminUserManagement() {
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="userId">User ID</Label>
-                    <Input
-                      id="userId"
-                      value={userId}
-                      onChange={(e) => setUserId(e.target.value)}
-                      placeholder="Enter unique user ID"
-                      required
-                    />
+                    <Input id="userId" value={userId} onChange={(e) => setUserId(e.target.value)} required />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="name">Full Name</Label>
-                    <Input
-                      id="name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Enter full name"
-                      required
-                    />
+                    <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="image">Profile Image</Label>
+                    <Label>Profile Image</Label>
                     <div className="flex items-center gap-2">
                       <Input
                         id="image"
@@ -249,26 +329,52 @@ export default function AdminUserManagement() {
                         ref={fileInputRef}
                         className="hidden"
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="flex items-center gap-2"
-                      >
-                        <Upload className="h-4 w-4" />
-                        Upload Image
+                      <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                        <Upload className="h-4 w-4" /> Upload
+                      </Button>
+                      <Button type="button" variant="outline" onClick={startCamera}>
+                        <Camera className="h-4 w-4" /> Capture
                       </Button>
                     </div>
                   </div>
+
+                  {isCameraOpen && (
+                    <div className="space-y-2">
+                      <Label>Camera Preview</Label>
+                      <div className="relative w-full h-64">
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover border rounded-md bg-black"
+                        />
+                        {/* Face grid overlay */}
+                        <div className="absolute inset-0 pointer-events-none grid grid-cols-3 grid-rows-3 border-2 border-white/50">
+                          {[...Array(9)].map((_, i) => (
+                            <div key={i} className="border border-white/30"></div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button type="button" onClick={captureImage} className="w-full" disabled={!isReady}>
+                          Capture Photo
+                        </Button>
+                        <Button type="button" onClick={stopCamera} variant="outline" className="w-full">
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
 
                   {imagePreview && (
                     <div className="space-y-2">
                       <Label>Preview</Label>
                       <img
                         ref={imageRef}
-                        src={imagePreview || "/placeholder.svg"}
+                        src={imagePreview}
                         alt="Preview"
-                        className="w-full h-32 object-cover rounded-md border"
+                        className="w-full h-48 object-contain border rounded-md bg-white"
                         crossOrigin="anonymous"
                       />
                     </div>
@@ -282,6 +388,7 @@ export default function AdminUserManagement() {
             </Dialog>
           </div>
         </CardHeader>
+
         <CardContent>
           {message && (
             <Alert variant={message.type === "error" ? "destructive" : "default"} className="mb-4">
